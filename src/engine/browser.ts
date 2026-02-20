@@ -1,4 +1,11 @@
-import { chromium, Browser, BrowserContext, Page } from 'playwright';
+import { chromium as chromiumExtra } from 'playwright-extra';
+import { createRequire } from 'module';
+import type { Browser, BrowserContext, Page } from 'playwright';
+
+// Load the stealth plugin (CommonJS) from an ESM module
+const _require = createRequire(import.meta.url);
+const StealthPlugin = _require('puppeteer-extra-plugin-stealth');
+chromiumExtra.use(StealthPlugin());
 import type {
   AgentBrowserConfig,
   AgentSession,
@@ -33,10 +40,10 @@ export class BrowserEngine {
       );
     }
 
-    this.browser = await chromium.launch({
+    this.browser = await chromiumExtra.launch({
       headless: this.config.headless ?? true,
       args: launchArgs,
-    });
+    }) as unknown as Browser;
   }
 
   async close(): Promise<void> {
@@ -61,16 +68,18 @@ export class BrowserEngine {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       storageState: storageState ? (storageState as any) : undefined,
       userAgent: this.config.stealth ? getRandomUserAgent() : undefined,
-      viewport: { width: 1280, height: 800 },
-      // Make automation harder to detect
+      viewport: { width: 1440, height: 900 },
+      deviceScaleFactor: 1,
+      hasTouch: false,
       extraHTTPHeaders: this.config.stealth
-        ? { 'Accept-Language': 'en-US,en;q=0.9' }
+        ? {
+            'Accept-Language': 'en-US,en;q=0.9',
+            'sec-ch-ua': '"Chromium";v="121", "Not A(Brand";v="99"',
+            'sec-ch-ua-mobile': '?0',
+            'sec-ch-ua-platform': '"Windows"',
+          }
         : undefined,
     });
-
-    if (this.config.stealth) {
-      await this.applyStealthPatches(context);
-    }
 
     const page = await context.newPage();
     this.contexts.set(sessionId, context);
@@ -101,8 +110,15 @@ export class BrowserEngine {
 
   async navigate(sessionId: string, url: string): Promise<void> {
     const page = this.getPage(sessionId);
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+
+    // Reddit's SPA aggressively blocks headless — transparently reroute to old.reddit.com
+    const navigateUrl = url.match(/^https?:\/\/(www\.)?reddit\.com/)
+      ? url.replace(/^(https?:\/\/)(www\.)?reddit\.com/, '$1old.reddit.com')
+      : url;
+
+    await page.goto(navigateUrl, { waitUntil: 'domcontentloaded', timeout: 30_000 });
     await this.waitForStability(page);
+    await this.dismissPopups(page);
   }
 
   async getCurrentUrl(sessionId: string): Promise<string> {
@@ -193,16 +209,68 @@ export class BrowserEngine {
     const page = this.getPage(sessionId);
     const url = page.url();
     const title = await page.title();
-    const html = await page.content();
 
+    // Only flag real CAPTCHA blocks — not cookie consent banners
     return (
-      url.includes('captcha') ||
-      url.includes('challenge') ||
-      title.toLowerCase().includes('captcha') ||
-      html.includes('cf-challenge') ||
-      html.includes('g-recaptcha') ||
-      html.includes('hcaptcha')
+      url.includes('/captcha') ||
+      url.includes('/challenge') ||
+      title.toLowerCase() === 'just a moment...' ||     // Cloudflare interstitial
+      title.toLowerCase().includes('attention required') // Cloudflare block
     );
+  }
+
+  /** Auto-dismiss cookie consent banners, signup modals, and GDPR overlays */
+  private async dismissPopups(page: Page): Promise<void> {
+    const CONSENT_SELECTORS = [
+      // OneTrust (BBC, many large sites)
+      '#onetrust-accept-btn-handler',
+      '.onetrust-accept-btn-handler',
+      // Cookiebot
+      '#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll',
+      '#CybotCookiebotDialogBodyButtonAccept',
+      // Funding Choices (Google)
+      '.fc-button.fc-cta-consent',
+      '.fc-cta-consent',
+      // Wikipedia cookie banner
+      'button.cdx-button--action:has-text("Accept")',
+      // Reddit — cookie consent + "continue" gate
+      'button[data-testid="GDPR-accept-button"]',
+      'button:has-text("Accept all")',
+      'button:has-text("Accept All")',
+      'button:has-text("Continue")',
+      // Stack Overflow — dismiss the "Join Stack Overflow" interstitial
+      '.js-notice-dismiss',
+      'button[data-dismiss="modal"]',
+      '.js-dismiss',
+      '.s-notice--danger .s-notice--btn',
+      '.js-close-button',
+      'button[aria-label="Dismiss"]',
+      // Generic
+      '#accept-choices',
+      '.accept-cookies',
+      'button:has-text("I Accept")',
+      'button:has-text("Got it")',
+      'button:has-text("OK, I agree")',
+      'button:has-text("Agree and continue")',
+      '[aria-label="Accept all"]',
+      '[aria-label="Accept cookies"]',
+    ];
+
+    for (const selector of CONSENT_SELECTORS) {
+      try {
+        const el = page.locator(selector).first();
+        if (await el.isVisible({ timeout: 500 })) {
+          await el.click({ timeout: 2_000 });
+          await page.waitForTimeout(300);
+          return; // one dismissal per navigate is enough
+        }
+      } catch {
+        // not present, try next
+      }
+    }
+
+    // Last resort: Escape key dismisses most modal overlays
+    try { await page.keyboard.press('Escape'); } catch { /* ignore */ }
   }
 
   // ─── Internals ─────────────────────────────────────────────────────────────
@@ -237,22 +305,6 @@ export class BrowserEngine {
     }
   }
 
-  private async applyStealthPatches(context: BrowserContext): Promise<void> {
-    await context.addInitScript(() => {
-      // Remove webdriver flag
-      Object.defineProperty(navigator, 'webdriver', { get: () => false });
-
-      // Fake plugins
-      Object.defineProperty(navigator, 'plugins', {
-        get: () => [{ name: 'Chrome PDF Plugin' }, { name: 'Chrome PDF Viewer' }],
-      });
-
-      // Fake languages
-      Object.defineProperty(navigator, 'languages', {
-        get: () => ['en-US', 'en'],
-      });
-    });
-  }
 }
 
 // ─── Utilities ─────────────────────────────────────────────────────────────
