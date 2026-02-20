@@ -46,11 +46,29 @@ await browser.action('authenticate', { email, password })
 
 **Self-healing execution** — CAPTCHA detection, stale selector recovery, and post-action state verification are handled silently. Agents see task outcomes, not infrastructure failures.
 
+**Bot detection bypass** — Ships with `playwright-extra` + stealth plugin. Bypasses Cloudflare challenges, cookie consent banners (OneTrust, Cookiebot, GDPR), and signup modals automatically on every navigation. No configuration needed.
+
 **Session persistence** — Sessions are first-class objects. Save, restore, and branch browser state across agent runs. Auth state survives restarts.
 
 **MCP server** — Ships as a Model Context Protocol server. Any MCP-compatible agent (Claude Code, LangChain, AutoGen, custom) connects without integration work.
 
 **Parallel tasks** — Declare goals, not tabs. The runtime manages contexts, isolation, and result aggregation.
+
+---
+
+## Tested Sites
+
+Results from parallel 7-site test (14s total):
+
+| Site | Page Type Detected | Notes |
+|------|--------------------|-------|
+| news.ycombinator.com | `listing` | Actions execute (navigate, read, submit) |
+| en.wikipedia.org | `article` | Cookie banner auto-dismissed |
+| github.com | `landing` | Full action set available |
+| stackoverflow.com | `listing` | Signup modal stripped before analysis |
+| www.bbc.com | `listing` | OneTrust consent auto-dismissed |
+| www.theverge.com | `listing` | Cloudflare challenge bypassed |
+| www.reddit.com | blocked | IP-level network block — no client-side bypass |
 
 ---
 
@@ -90,11 +108,12 @@ await browser.launch()
 // Navigate — returns semantic model, not HTML
 const state = await browser.navigate('https://news.ycombinator.com')
 console.log(state.page_type)          // 'listing'
-console.log(state.available_actions)  // ['read_story', 'submit', 'login', ...]
+console.log(state.available_actions)  // ['navigate_to_new', 'navigate_to_ask', ...]
 console.log(state.key_data)           // { story_count: 30, top_story: '...' }
 
-// Execute actions by name
-await browser.action('read_story', { rank: 1 })
+// Execute actions by name — actually clicks/navigates
+await browser.action('navigate_to_new')
+// → browser navigates to https://news.ycombinator.com/newest
 
 // Extract structured data
 const data = await browser.extract({
@@ -110,6 +129,17 @@ await browser.saveSession('hn-logged-in')
 await browser.restoreSession('hn-logged-in')
 
 await browser.close()
+```
+
+### Run multiple sites in parallel
+
+```typescript
+const results = await browser.executor.runParallel([
+  { id: 'hn',   goal: 'get top stories', url: 'https://news.ycombinator.com' },
+  { id: 'bbc',  goal: 'get headlines',   url: 'https://www.bbc.com/news' },
+  { id: 'gh',   goal: 'check trending',  url: 'https://github.com' },
+])
+// All three run concurrently in isolated browser contexts
 ```
 
 ### As an MCP server
@@ -153,7 +183,7 @@ Then in any conversation, Claude has access to:
 
 ```
 First visit to stripe.com/login
-  → Full LLM analysis (3-4 seconds)
+  → Full LLM analysis (~4 seconds)
   → Stores: page model, page type, selectors
 
 Second visit (within 30 min)
@@ -179,6 +209,25 @@ The browser gets permanently smarter about each site. Knowledge compounds across
 
 ---
 
+## Bot Detection & Popup Handling
+
+AgentBrowser handles anti-bot measures automatically:
+
+**Stealth** — Uses `playwright-extra` with the full stealth plugin suite. Patches WebGL, canvas fingerprint, `navigator.webdriver`, plugins, permissions, `chrome.runtime`, and more. Passes most bot detection checks including Cloudflare.
+
+**Consent auto-dismissal** — After every navigation, automatically clicks through:
+- OneTrust / Cookiebot / Funding Choices banners
+- Wikipedia cookie prompts
+- Reddit GDPR gates
+- Stack Overflow notice bars
+- Generic "Accept all" / "Got it" / "Agree" buttons
+
+**Force removal** — If no button is found, JS-removes known overlay elements (`.s-modal`, cookie policy overlays, full-viewport fixed backdrops) so they don't pollute the semantic analysis.
+
+**Modal stripping** — Before sending HTML to the LLM, modal/consent/overlay elements are stripped from the input so they can't mislead page classification.
+
+---
+
 ## Architecture
 
 ```
@@ -195,7 +244,7 @@ Agent
 │  │      Semantic Analyzer        │  │  ← Claude Haiku: page → structured model
 │  └───────────────────────────────┘  │
 │  ┌───────────────────────────────┐  │
-│  │       Browser Engine          │  │  ← Playwright: stealth Chromium
+│  │       Browser Engine          │  │  ← playwright-extra: stealth Chromium
 │  └───────────────────────────────┘  │
 └─────────────────────────────────────┘
   │
@@ -207,7 +256,7 @@ Agent
 | Component | File | Role |
 |-----------|------|------|
 | Types | `src/types.ts` | `SemanticPageModel`, `ActionDefinition`, `AgentSession` |
-| Browser Engine | `src/engine/browser.ts` | Playwright wrapper, stealth, sessions |
+| Browser Engine | `src/engine/browser.ts` | playwright-extra wrapper, stealth, consent dismissal, sessions |
 | Semantic Analyzer | `src/semantic/analyzer.ts` | LLM page analysis with site context injection |
 | Site Memory | `src/memory/store.ts` | SQLite: page cache, selector library, site profiles |
 | Task Executor | `src/runtime/executor.ts` | Self-healing execution, learning feedback loop |
