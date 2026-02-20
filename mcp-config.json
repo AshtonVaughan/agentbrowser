@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "agentbrowser": {
+      "command": "node",
+      "args": ["C:/Users/vaugh/agentbrowser/dist/server/mcp.js"],
+      "env": {
+        "ANTHROPIC_API_KEY": "YOUR_KEY_HERE",
+        "AGENTBROWSER_HEADLESS": "true",
+        "AGENTBROWSER_STEALTH": "true"
+      }
+    }
+  }
+}
