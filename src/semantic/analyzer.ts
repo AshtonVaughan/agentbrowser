@@ -165,6 +165,8 @@ What changed? Return the same JSON structure as before but updated. Include real
       .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
       .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, '')
       .replace(/<!--[\s\S]*?-->/g, '')
+      // Remove modal/overlay elements before LLM analysis so they don't mislead classification
+      .replace(/<[^>]+(class|id)="[^"]*(?:modal|overlay|consent|gdpr|cookie|signup-wall|join-now)[^"]*"[^>]*>[\s\S]*?<\/[a-z]+>/gi, '')
       .replace(/<[^>]+>/g, ' ')
       .replace(/\s+/g, ' ')
       .trim();

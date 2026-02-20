@@ -111,10 +111,13 @@ export class BrowserEngine {
   async navigate(sessionId: string, url: string): Promise<void> {
     const page = this.getPage(sessionId);
 
-    // Reddit's SPA aggressively blocks headless — transparently reroute to old.reddit.com
-    const navigateUrl = url.match(/^https?:\/\/(www\.)?reddit\.com/)
-      ? url.replace(/^(https?:\/\/)(www\.)?reddit\.com/, '$1old.reddit.com')
-      : url;
+    // Reddit blocks headless browsers at the network level.
+    // Use Reddit's public JSON API as a fallback — appending .json returns clean data.
+    let navigateUrl = url;
+    if (url.match(/^https?:\/\/(www\.|old\.)?reddit\.com/)) {
+      const path = url.replace(/^https?:\/\/(www\.|old\.)?reddit\.com/, '').replace(/\/?$/, '');
+      navigateUrl = `https://www.reddit.com${path || '/r/popular'}.json?limit=10`;
+    }
 
     await page.goto(navigateUrl, { waitUntil: 'domcontentloaded', timeout: 30_000 });
     await this.waitForStability(page);
