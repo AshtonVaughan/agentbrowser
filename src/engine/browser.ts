@@ -144,13 +144,34 @@ export class BrowserEngine {
 
   async click(sessionId: string, selector: string): Promise<void> {
     const page = this.getPage(sessionId);
-    await page.click(selector, { timeout: 10_000 });
+    const normalized = this.normalizeSelector(selector);
+
+    try {
+      await page.click(normalized, { timeout: 10_000 });
+    } catch (primaryErr) {
+      // Fallback: if normalized selector still fails, try Playwright text-based locator
+      const textMatch = normalized.match(/:has-text\("([^"]+)"\)/);
+      if (textMatch) {
+        const tagMatch = normalized.match(/^([a-zA-Z][a-zA-Z0-9]*)/);
+        const tag = tagMatch ? tagMatch[1] : '*';
+        const locator = page.locator(tag).filter({ hasText: textMatch[1]! }).first();
+        try {
+          await locator.click({ timeout: 10_000 });
+        } catch {
+          throw primaryErr; // surface original error
+        }
+      } else {
+        throw primaryErr;
+      }
+    }
+
     await this.waitForStability(page);
   }
 
   async fill(sessionId: string, selector: string, value: string): Promise<void> {
     const page = this.getPage(sessionId);
-    await page.fill(selector, value, { timeout: 10_000 });
+    const normalized = this.normalizeSelector(selector);
+    await page.fill(normalized, value, { timeout: 10_000 });
   }
 
   async select(sessionId: string, selector: string, value: string): Promise<void> {
@@ -185,6 +206,18 @@ export class BrowserEngine {
   }
 
   // ─── Internals ─────────────────────────────────────────────────────────────
+
+  /**
+   * Normalize selectors for Playwright compatibility.
+   * Converts non-standard pseudo-selectors to Playwright equivalents:
+   *   :contains('text')  →  :has-text("text")
+   *   [text='value']     →  :has-text("value")  (not a real CSS attribute)
+   */
+  private normalizeSelector(selector: string): string {
+    return selector
+      .replace(/:contains\(['"]([^'"]+)['"]\)/g, ':has-text("$1")')
+      .replace(/\[text=['"]([^'"]+)['"]\]/g, ':has-text("$1")');
+  }
 
   private getPage(sessionId: string): Page {
     const page = this.pages.get(sessionId);

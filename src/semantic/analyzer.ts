@@ -59,10 +59,15 @@ Return ONLY valid JSON with this exact structure:
 }
 
 CRITICAL RULES:
-- _internal MUST have real CSS selectors from the actual page HTML. Use id, name, type, placeholder, aria-label to build selectors.
+- _internal MUST have real CSS selectors from the actual page HTML.
+- SELECTOR PRIORITY (use highest available): id (#id) > name (input[name=x]) > aria-label ([aria-label=x]) > href (a[href='/path']) > type+placeholder > class combinations
+- NEVER use :contains() — it is jQuery-only and will break execution. Use :has-text() or attribute selectors instead.
+- For links/navigation: ALWAYS use a[href='value'] with the ACTUAL href from the HTML (e.g. a[href='newest'], a[href='/ask'], a[href='https://...']). NEVER use [text=...].
+- For buttons: prefer button[type=submit], button[name=x], or button[aria-label=x]
+- For inputs: prefer input[name=x], input[type=x], input[id=x], input[placeholder=x]
 - For form actions (login, signup, fill): use type="form", populate field_map AND submit_selector
 - For button/link clicks: use type="click", populate selector
-- For navigation: use type="navigate", populate selector with the href value
+- For navigation (links that take you to a new page): use type="navigate", selector = a[href='actualHref'] from the HTML
 - available_actions should only include things actually possible on this page
 - key_data should contain prices, counts, names, statuses — whatever is most decision-relevant
 - Keep all text values concise`;

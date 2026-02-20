@@ -299,7 +299,13 @@ export class TaskExecutor {
       }
 
       if (internal.type === 'navigate' && internal.selector) {
-        await this.engine.navigate(sessionId, internal.selector);
+        const sel = internal.selector;
+        // If selector is a real URL, use goto. Otherwise click the link element.
+        if (sel.startsWith('http://') || sel.startsWith('https://')) {
+          await this.engine.navigate(sessionId, sel);
+        } else {
+          await this.engine.click(sessionId, sel);
+        }
         return;
       }
     }
