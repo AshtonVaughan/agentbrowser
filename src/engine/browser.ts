@@ -119,6 +119,7 @@ export class BrowserEngine {
     await page.goto(navigateUrl, { waitUntil: 'domcontentloaded', timeout: 30_000 });
     await this.waitForStability(page);
     await this.dismissPopups(page);
+    await this.forceRemoveOverlays(page);
   }
 
   async getCurrentUrl(sessionId: string): Promise<string> {
@@ -233,16 +234,16 @@ export class BrowserEngine {
       '.fc-cta-consent',
       // Wikipedia cookie banner
       'button.cdx-button--action:has-text("Accept")',
-      // Reddit — cookie consent + "continue" gate
+      // Reddit (old.reddit.com) cookie consent
+      '.cookie-policy-overlay button:has-text("Accept all")',
       'button[data-testid="GDPR-accept-button"]',
       'button:has-text("Accept all")',
       'button:has-text("Accept All")',
-      'button:has-text("Continue")',
-      // Stack Overflow — dismiss the "Join Stack Overflow" interstitial
+      'button:has-text("Accept non-essential cookies")',
+      // Stack Overflow — close notice bar + modal
       '.js-notice-dismiss',
       'button[data-dismiss="modal"]',
       '.js-dismiss',
-      '.s-notice--danger .s-notice--btn',
       '.js-close-button',
       'button[aria-label="Dismiss"]',
       // Generic
@@ -256,21 +257,61 @@ export class BrowserEngine {
       '[aria-label="Accept cookies"]',
     ];
 
+    // Wait for lazy-loaded popups to mount
+    await page.waitForTimeout(1_500);
+
     for (const selector of CONSENT_SELECTORS) {
       try {
         const el = page.locator(selector).first();
-        if (await el.isVisible({ timeout: 500 })) {
+        if (await el.isVisible({ timeout: 300 })) {
           await el.click({ timeout: 2_000 });
-          await page.waitForTimeout(300);
-          return; // one dismissal per navigate is enough
+          await page.waitForTimeout(400);
+          return;
         }
       } catch {
         // not present, try next
       }
     }
 
-    // Last resort: Escape key dismisses most modal overlays
     try { await page.keyboard.press('Escape'); } catch { /* ignore */ }
+  }
+
+  /**
+   * Force-remove overlays that block page content using JS.
+   * Fallback when click-based dismissal doesn't find a button.
+   */
+  private async forceRemoveOverlays(page: Page): Promise<void> {
+    try {
+      await page.evaluate(() => {
+        // Stack Overflow: signup interstitial and GDPR banners
+        document.querySelectorAll(
+          '.s-modal__backdrop, .s-modal, .js-consent-banner, ' +
+          '#js-gdpr-consent-banner, .js-dismissable-hero, .ps-fixed',
+        ).forEach((el) => el.remove());
+
+        // Reddit old.reddit.com: cookie policy overlay
+        document.querySelectorAll(
+          '.cookie-policy-overlay, #cookie-policy-banner',
+        ).forEach((el) => el.remove());
+
+        // Generic: hide any fixed full-viewport overlay (modal backdrop)
+        (document.querySelectorAll<HTMLElement>('*') as unknown as HTMLElement[]).forEach((el) => {
+          const style = window.getComputedStyle(el);
+          const rect = el.getBoundingClientRect();
+          if (
+            (style.position === 'fixed' || style.position === 'absolute') &&
+            parseFloat(style.opacity ?? '1') > 0.3 &&
+            rect.width > window.innerWidth * 0.85 &&
+            rect.height > window.innerHeight * 0.75 &&
+            !['BODY', 'HTML', 'HEADER', 'NAV', 'MAIN'].includes(el.tagName)
+          ) {
+            el.style.display = 'none';
+          }
+        });
+      });
+    } catch {
+      // page may have navigated — ignore
+    }
   }
 
   // ─── Internals ─────────────────────────────────────────────────────────────
